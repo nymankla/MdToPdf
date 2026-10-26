@@ -16,6 +16,8 @@
 
   <ItemGroup>
     <Compile Remove="samples/**" />
+    <Compile Remove="tests/**" />
+    <InternalsVisibleTo Include="MdToPdf.Tests" />
   </ItemGroup>
 
 </Project>

@@ -1,7 +1,7 @@
 # MdToPdf
 
 A small, dependency-free Markdown → PDF converter in C#. No NuGet packages and no
-browser. The only dependency is the .NET base class library. It builds to a ~1.8 MB native exe.
+browser. The only dependency is the .NET base class library. It builds to a ~1.8 MB native exe that requires Windows 11.
 
 ```
 mdtopdf <input.md> [output.pdf]
@@ -45,6 +45,7 @@ The PDF output also includes:
 ```powershell
 dotnet build                     # analyzers run; warnings fail the build
 dotnet format --verify-no-changes  # style / formatting lint
+dotnet test --project tests\MdToPdf.Tests  # xUnit v3 test suite
 dotnet run -- samples\sample.md  # try it
 ```
 
@@ -65,4 +66,6 @@ dotnet publish -c Release -r win-x64 -o publish
 | `src/PdfWriter.cs` | PDF object, stream and xref serialization |
 | `src/Fonts.cs` | Standard-font width tables and WinAnsi encoding |
 | `src/Images.cs` | JPEG passthrough, PNG passthrough or alpha decoding |
+| `src/Cli.cs` | Argument handling, file I/O and exit codes |
 | `samples/` | Feature tour and page-break stress tests |
+| `tests/MdToPdf.Tests/` | xUnit tests, one class per source file |
