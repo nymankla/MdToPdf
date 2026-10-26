@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>mdtopdf</AssemblyName>
+    <RootNamespace>MdToPdf</RootNamespace>
+
+    <!-- Lean: native single-file exe, no ICU, no resource strings. -->
+    <PublishAot>true</PublishAot>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <UseSystemResourceKeys>true</UseSystemResourceKeys>
+    <OptimizationPreference>Size</OptimizationPreference>
+    <!-- The XML doc file exists only to enable IDE0005; don't ship it. -->
+    <PublishDocumentationFile>false</PublishDocumentationFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Remove="samples/**" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,5 @@
+bin/
+obj/
+publish/
+*.pdf
+!samples/*.pdf
