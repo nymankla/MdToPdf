@@ -46,4 +46,28 @@ public sealed class FontsTests
 
     [Fact]
     public void EmptyStringHasNoWidth() => Assert.Equal(0, Fonts.Width("", FontId.Regular, 10));
+
+    // ---------------------------------------------------------------- Prepare
+
+    [Theory]
+    [InlineData("a → b", "a -> b")]
+    [InlineData("x ≤ y ≠ z", "x <= y != z")]
+    [InlineData("done ✓", "done x")]
+    [InlineData("x😀y", "x?y")]
+    [InlineData("é € “q”", "é € “q”")]
+    public void PrepareUsesAsciiStandIns(string text, string expected) => Assert.Equal(expected, Fonts.Prepare(text));
+
+    [Fact]
+    public void PrepareDropsInvisibleChars() =>
+        Assert.Equal("ok x", Fonts.Prepare("ok ✔" + (char)0xFE0F + (char)0x200D + (char)0xFEFF));
+
+    [Fact]
+    public void PrepareTurnsThinSpaceIntoBreakableSpace() => Assert.Equal("a b", Fonts.Prepare("a" + (char)0x2009 + "b"));
+
+    [Fact]
+    public void PrepareReturnsAsciiUnchanged()
+    {
+        var text = "plain ASCII text";
+        Assert.Same(text, Fonts.Prepare(text));
+    }
 }

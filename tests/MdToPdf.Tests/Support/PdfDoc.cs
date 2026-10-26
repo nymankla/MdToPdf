@@ -37,9 +37,9 @@ internal sealed partial class PdfDoc
 
     public int PageCount => PageIds.Count;
 
-    public static PdfDoc Render(string markdown, string? baseDir = null, string title = "Test")
+    public static PdfDoc Render(string markdown, string? baseDir = null, string title = "Test", TextWriter? warnings = null)
     {
-        var renderer = new Renderer(baseDir ?? Path.GetTempPath());
+        var renderer = new Renderer(baseDir ?? Path.GetTempPath(), warnings ?? TextWriter.Null);
         renderer.Render(Markdown.Parse(markdown));
         using var ms = new MemoryStream();
         renderer.Save(ms, title);

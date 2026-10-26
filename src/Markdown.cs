@@ -25,53 +25,9 @@ internal static partial class Markdown
         return ParseBlocks(lines.Select(ExpandTabs).ToList());
     }
 
-    // ASCII stand-ins for common symbols the standard fonts lack.
-    private static readonly Dictionary<char, string> Fallbacks = new()
-    {
-        ['→'] = "->",
-        ['←'] = "<-",
-        ['↔'] = "<->",
-        ['⇒'] = "=>",
-        ['⇐'] = "<=",
-        ['≤'] = "<=",
-        ['≥'] = ">=",
-        ['≠'] = "!=",
-        ['≈'] = "~",
-        ['−'] = "-",
-        ['✓'] = "x",
-        ['✔'] = "x",
-        ['✗'] = "-",
-        ['✘'] = "-",
-        ['☐'] = "[ ]",
-        ['☑'] = "[x]",
-        ['★'] = "*",
-        [' '] = " ",
-        [' '] = " ",
-    };
-
-    /// <summary>Replaces or drops chars that can never render with the standard fonts (astral planes, joiners, variation selectors).</summary>
-    private static string Sanitize(string text)
-    {
-        var sb = new StringBuilder(text.Length);
-        foreach (var c in text.Normalize(NormalizationForm.FormC))
-        {
-            if (char.IsHighSurrogate(c) || c is '‍' or '︎' or '﻿' or '️')
-            {
-                continue;
-            }
-
-            if (Fallbacks.TryGetValue(c, out var fallback))
-            {
-                sb.Append(fallback);
-            }
-            else
-            {
-                sb.Append(char.IsLowSurrogate(c) ? '?' : c);
-            }
-        }
-
-        return sb.ToString();
-    }
+    /// <summary>Composes accents (e + combining acute → é) so they map to single WinAnsi chars, and drops a leading BOM.
+    /// Font fallbacks happen later, in <see cref="Fonts.Prepare"/>, so the AST keeps the original text.</summary>
+    private static string Sanitize(string text) => text.Normalize(NormalizationForm.FormC).TrimStart('\uFEFF');
 
     private static string ExpandTabs(string line)
     {

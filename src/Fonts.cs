@@ -1,3 +1,5 @@
+using System.Text;
+
 namespace MdToPdf;
 
 /// <summary>The standard PDF fonts used by the renderer; the value is the resource index (/F0../F4).</summary>
@@ -77,6 +79,63 @@ internal static class Fonts
         ['ž'] = 158,
         ['Ÿ'] = 159,
     };
+
+    // ASCII stand-ins for common symbols the standard fonts lack.
+    private static readonly Dictionary<char, string> Fallbacks = new()
+    {
+        ['→'] = "->",
+        ['←'] = "<-",
+        ['↔'] = "<->",
+        ['⇒'] = "=>",
+        ['⇐'] = "<=",
+        ['≤'] = "<=",
+        ['≥'] = ">=",
+        ['≠'] = "!=",
+        ['≈'] = "~",
+        ['−'] = "-",
+        ['✓'] = "x",
+        ['✔'] = "x",
+        ['✗'] = "-",
+        ['✘'] = "-",
+        ['☐'] = "[ ]",
+        ['☑'] = "[x]",
+        ['★'] = "*",
+        ['\u2009'] = " ", // thin space
+        ['\u202F'] = "\u00A0", // narrow no-break space
+    };
+
+    /// <summary>
+    /// Rewrites text for drawing with the standard fonts: common symbols get ASCII stand-ins, invisible chars
+    /// (joiners, variation selectors, BOM) are dropped and astral chars (emoji) become '?'. Everything that is
+    /// measured or drawn goes through this; the AST and bookmarks keep the original Unicode.
+    /// </summary>
+    public static string Prepare(string text)
+    {
+        if (text.AsSpan().IndexOfAnyExceptInRange(' ', '~') < 0)
+        {
+            return text;
+        }
+
+        var sb = new StringBuilder(text.Length);
+        foreach (var c in text)
+        {
+            if (char.IsHighSurrogate(c) || c is '\u200D' or '\uFE0E' or '\uFE0F' or '\uFEFF')
+            {
+                continue;
+            }
+
+            if (Fallbacks.TryGetValue(c, out var fallback))
+            {
+                sb.Append(fallback);
+            }
+            else
+            {
+                sb.Append(char.IsLowSurrogate(c) ? '?' : c);
+            }
+        }
+
+        return sb.ToString();
+    }
 
     /// <summary>Maps a char to its WinAnsi byte; anything unrepresentable becomes '?'.</summary>
     public static byte Encode(char c) => c switch

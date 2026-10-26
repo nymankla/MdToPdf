@@ -97,6 +97,51 @@ public sealed class CliTests
     }
 
     [Fact]
+    public void LockedOutputFailsWithoutTouchingIt()
+    {
+        using var dir = new TempDir();
+        var input = dir.File("doc.md", "Hello");
+        var output = dir.File("doc.pdf", "old");
+
+        int code;
+        string @out, err;
+        using (new FileStream(output, FileMode.Open, FileAccess.Read, FileShare.None))
+        {
+            (code, @out, err) = Run(input);
+        }
+
+        Assert.Equal(1, code);
+        Assert.Empty(@out);
+        Assert.Equal($"error: cannot write {output}: the file is open in another program", err.Trim());
+        Assert.Equal("old", File.ReadAllText(output));
+    }
+
+    [Fact]
+    public void MissingOutputFolderFails()
+    {
+        using var dir = new TempDir();
+        var input = dir.File("doc.md", "Hello");
+        var output = Path.Combine(dir.Path, "no-such-dir", "out.pdf");
+
+        var (code, @out, err) = Run(input, output);
+        Assert.Equal(1, code);
+        Assert.Empty(@out);
+        Assert.Equal($"error: cannot write {output}: the folder does not exist", err.Trim());
+    }
+
+    [Fact]
+    public void WarningsGoToStderr()
+    {
+        using var dir = new TempDir();
+        var input = dir.File("doc.md", "![](missing.png)\n\n[x](#nowhere)");
+
+        var (code, _, err) = Run(input);
+        Assert.Equal(0, code);
+        Assert.Contains("warning: image 'missing.png' not embedded", err, StringComparison.Ordinal);
+        Assert.Contains("warning: link '#nowhere' matches no heading", err, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void ImagesResolveRelativeToInput()
     {
         using var dir = new TempDir();

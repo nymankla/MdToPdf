@@ -73,15 +73,12 @@ public sealed class MarkdownTests
     // ---------------------------------------------------------------- sanitizing
 
     [Theory]
-    [InlineData("a → b", "a -> b")]
-    [InlineData("x ≤ y ≠ z", "x <= y != z")]
-    [InlineData("done ✓", "done x")]
-    [InlineData("﻿Hello", "Hello")]
-    [InlineData("x😀y", "x?y")]
-    [InlineData("ok ✔️", "ok x")]
-    [InlineData("é", "é")]
-    public void SanitizesUnrenderableCharacters(string md, string expected) =>
-        Assert.Equal(expected, Text(Single<Paragraph>(md)));
+    [InlineData("\uFEFFHello", "Hello")]
+    [InlineData("e\u0301", "\u00E9")]
+    public void NormalizesInput(string md, string expected) => Assert.Equal(expected, Text(Single<Paragraph>(md)));
+
+    [Fact]
+    public void KeepsCharactersTheFontsLack() => Assert.Equal("a → b 😀", Text(Single<Paragraph>("a → b 😀")));
 
     // ---------------------------------------------------------------- code
 

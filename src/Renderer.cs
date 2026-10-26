@@ -40,7 +40,7 @@ internal sealed class Renderer
 
     private sealed record Token(string Text, FontId Font, double Size, Rgb Color, string? Link, Style Style)
     {
-        public double Width { get; } = Fonts.Width(Text, Font, Size);
+        public double Width { get; init; } = Fonts.Width(Text, Font, Size);
     }
 
     private sealed record Line(List<(Token Token, double X)> Items, double Width, double Height, double Size);
@@ -56,15 +56,20 @@ internal sealed class Renderer
     private readonly PdfWriter pdf = new();
     private readonly List<Page> pages = [];
     private readonly List<Anchor> anchors = [];
+    private readonly Dictionary<string, int> slugCounts = [];
     private readonly Dictionary<string, PdfImage?> images = [];
     private readonly string baseDir;
+    private readonly TextWriter warnings;
     private Page page;
     private double y;
     private Rgb ink = Ink;
 
-    public Renderer(string baseDir)
+    /// <param name="baseDir">Directory that relative image paths resolve against.</param>
+    /// <param name="warnings">Receives non-fatal problems (missing images, unresolved anchors).</param>
+    public Renderer(string baseDir, TextWriter warnings)
     {
         this.baseDir = baseDir;
+        this.warnings = warnings;
         NewPage();
     }
 
@@ -141,9 +146,7 @@ internal sealed class Renderer
         EnsureSpace(lines.Sum(l => l.Height) + (BaseSize * Leading * 2)); // keep with next
 
         var title = Inlines.PlainText(h.Content);
-        var slug = Slug(title);
-        var dupes = anchors.Count(a => a.Slug == slug || a.Slug.StartsWith(slug + "-", StringComparison.Ordinal));
-        anchors.Add(new Anchor(h.Level, title, dupes == 0 ? slug : Invariant($"{slug}-{dupes}"), pages.Count - 1, y));
+        anchors.Add(new Anchor(h.Level, title, UniqueSlug(Slug(title)), pages.Count - 1, y));
 
         PlaceLines(lines, x);
         if (h.Level <= 2)
@@ -163,7 +166,7 @@ internal sealed class Renderer
         var startY = y;
 
         y -= CodePad;
-        foreach (var line in c.Lines.DefaultIfEmpty(""))
+        foreach (var line in c.Lines.DefaultIfEmpty("").Select(Fonts.Prepare))
         {
             for (var p = 0; p == 0 || p < line.Length; p += maxChars)
             {
@@ -287,19 +290,63 @@ internal sealed class Renderer
         var head = Cells(t.Header, true);
         var headH = RowHeight(head);
         var rows = t.Rows.Select(r => Cells(r, false)).ToList();
-        EnsureSpace(headH + (rows.Count > 0 ? RowHeight(rows[0]) : 0));
+
+        void BreakPage()
+        {
+            NewPage();
+            DrawRow(head, headH, true); // repeat the header on every page
+        }
+
+        // Keep the header with the first row, or with the first line of a row too tall for any page.
+        var firstH = rows.Count == 0 ? 0 : RowHeight(rows[0]);
+        if (firstH > Top - Bottom - headH)
+        {
+            firstH = RowHeight([.. rows[0].Select(c => FittingLines(c, 0, force: true))]);
+        }
+
+        EnsureSpace(headH + firstH);
         DrawRow(head, headH, true);
         foreach (var cells in rows)
         {
-            var h = RowHeight(cells);
-            if (y - h < Bottom)
+            var rest = cells;
+            if (y - RowHeight(rest) < Bottom && RowHeight(rest) <= Top - Bottom - headH)
             {
-                NewPage();
-                DrawRow(head, headH, true); // repeat the header on every page
+                BreakPage(); // the row fits on a fresh page: move it there whole
             }
 
-            DrawRow(cells, h, false);
+            // A row taller than a page is split between lines, one page-sized slice at a time.
+            var fresh = false;
+            while (y - RowHeight(rest) < Bottom)
+            {
+                var room = y - Bottom - (2 * CellPadY);
+                var slice = rest.Select(c => FittingLines(c, room, force: fresh)).ToArray();
+                if (slice.Any(c => c.Count > 0))
+                {
+                    DrawRow(slice, RowHeight(slice), false);
+                    rest = [.. rest.Select((c, j) => c.GetRange(slice[j].Count, c.Count - slice[j].Count))];
+                }
+
+                BreakPage();
+                fresh = true;
+            }
+
+            if (rest == cells || rest.Any(c => c.Count > 0))
+            {
+                DrawRow(rest, RowHeight(rest), false);
+            }
         }
+    }
+
+    /// <summary>The leading lines whose total height fits in <paramref name="room"/>; at least one when <paramref name="force"/> is set.</summary>
+    private static List<Line> FittingLines(List<Line> lines, double room, bool force)
+    {
+        var n = 0;
+        for (var used = 0.0; n < lines.Count && (used + lines[n].Height <= room + Epsilon || (force && n == 0)); n++)
+        {
+            used += lines[n].Height;
+        }
+
+        return lines.GetRange(0, n);
     }
 
     private void RenderImage(ImageBlock block, double x, double w)
@@ -339,13 +386,13 @@ internal sealed class Renderer
             }
             catch (Exception e) when (e is IOException or UnauthorizedAccessException or ArgumentException or IndexOutOfRangeException or InvalidDataException)
             {
-                Console.Error.WriteLine($"warning: could not embed image '{source}': {e.Message}");
+                warnings.WriteLine($"warning: could not embed image '{source}': {e.Message}");
             }
         }
 
         if (img is null)
         {
-            Console.Error.WriteLine($"warning: image '{source}' not embedded (missing, remote or unsupported)");
+            warnings.WriteLine($"warning: image '{source}' not embedded (missing, remote or unsupported)");
         }
 
         images[source] = img;
@@ -364,7 +411,7 @@ internal sealed class Renderer
     private static double SizeFor(Style s, double size) => s.HasFlag(Style.Code) ? size * 0.9 : size;
 
     private static double LongestWord(List<Inline> content, double size, Style baseStyle) =>
-        content.SelectMany(i => i.Text.Split(' ').Select(word => Fonts.Width(word, FontFor(i.Style | baseStyle), SizeFor(i.Style | baseStyle, size))))
+        content.SelectMany(i => Fonts.Prepare(i.Text).Split(' ').Select(word => Fonts.Width(word, FontFor(i.Style | baseStyle), SizeFor(i.Style | baseStyle, size))))
             .DefaultIfEmpty(0).Max();
 
     /// <summary>Greedy line breaking of styled inline runs into lines no wider than <paramref name="width"/>.</summary>
@@ -445,7 +492,7 @@ internal sealed class Renderer
 
             var style = inline.Style | baseStyle;
             var (font, sz, col) = (FontFor(style), SizeFor(style, size), inline.Link is null ? color : LinkColor);
-            var text = inline.Text;
+            var text = Fonts.Prepare(inline.Text);
             for (var p = 0; p < text.Length;)
             {
                 if (text[p] == ' ')
@@ -479,21 +526,26 @@ internal sealed class Renderer
     /// <summary>Positions tokens on a line, merging neighbours that share a style into one text run.</summary>
     private static Line MakeLine(List<Token> tokens, double size, double leading)
     {
+        static bool SameRun(Token a, Token b) =>
+            a.Font == b.Font && a.Size == b.Size && a.Color == b.Color && a.Link == b.Link && a.Style == b.Style;
+
+        // Each run is joined once and its width summed from the already measured tokens, so long lines stay linear.
         var items = new List<(Token Token, double X)>();
         var x = 0.0;
-        foreach (var t in tokens)
+        for (var i = 0; i < tokens.Count;)
         {
-            if (items.Count > 0 && items[^1].Token is var prev && prev.Font == t.Font && prev.Size == t.Size
-                && prev.Color == t.Color && prev.Link == t.Link && prev.Style == t.Style)
+            var j = i + 1;
+            var width = tokens[i].Width;
+            for (; j < tokens.Count && SameRun(tokens[i], tokens[j]); j++)
             {
-                items[^1] = (new Token(prev.Text + t.Text, t.Font, t.Size, t.Color, t.Link, t.Style), items[^1].X);
-            }
-            else
-            {
-                items.Add((t, x));
+                width += tokens[j].Width;
             }
 
-            x += t.Width;
+            var run = j == i + 1 ? tokens[i]
+                : tokens[i] with { Text = string.Concat(tokens.GetRange(i, j - i).Select(t => t.Text)), Width = width };
+            items.Add((run, x));
+            x += width;
+            i = j;
         }
 
         var max = tokens.Select(t => t.Size).Append(size).Max();
@@ -565,6 +617,39 @@ internal sealed class Renderer
         return sb.ToString();
     }
 
+    /// <summary>De-duplicates a slug the way GitHub does: the second "intro" becomes "intro-1", the third "intro-2".</summary>
+    private string UniqueSlug(string slug)
+    {
+        var unique = slug;
+        while (slugCounts.ContainsKey(unique))
+        {
+            slugCounts[slug]++;
+            unique = Invariant($"{slug}-{slugCounts[slug]}");
+        }
+
+        slugCounts[unique] = 0;
+        return unique;
+    }
+
+    /// <summary>PDF URIs must be 7-bit ASCII: percent-encode everything else as UTF-8.</summary>
+    private static string EscapeUri(string uri)
+    {
+        var sb = new StringBuilder(uri.Length);
+        foreach (var b in Encoding.UTF8.GetBytes(uri))
+        {
+            if (b is > 0x20 and < 0x7F)
+            {
+                sb.Append((char)b);
+            }
+            else
+            {
+                sb.Append(CultureInfo.InvariantCulture, $"%{b:X2}");
+            }
+        }
+
+        return sb.ToString();
+    }
+
     // ---------------------------------------------------------------- output
 
     public void Save(Stream output, string title)
@@ -576,7 +661,8 @@ internal sealed class Renderer
 
         var pagesId = pdf.Reserve();
         var pageIds = pages.Select(_ => pdf.Reserve()).ToList();
-        var targets = anchors.GroupBy(a => a.Slug).ToDictionary(g => g.Key, g => Dest(g.First(), pageIds));
+        var targets = anchors.ToDictionary(a => a.Slug, a => Dest(a, pageIds));
+        var unresolved = new SortedSet<string>(StringComparer.Ordinal);
 
         for (var k = 0; k < pages.Count; k++)
         {
@@ -590,8 +676,12 @@ internal sealed class Renderer
             {
                 var action = link.Target.StartsWith('#')
                     ? targets.TryGetValue(link.Target[1..], out var dest) ? $"/Dest {dest}" : null
-                    : $"/A << /S /URI /URI {Literal(link.Target)} >>";
-                if (action is not null)
+                    : $"/A << /S /URI /URI {Literal(EscapeUri(link.Target))} >>";
+                if (action is null)
+                {
+                    unresolved.Add(link.Target);
+                }
+                else
                 {
                     annots.Add(pdf.Add($"<< /Type /Annot /Subtype /Link /Rect [{N(link.X0)} {N(link.Y0)} {N(link.X1)} {N(link.Y1)}] /Border [0 0 0] {action} >>"));
                 }
@@ -599,6 +689,11 @@ internal sealed class Renderer
 
             var annotRefs = annots.Count == 0 ? "" : $" /Annots [{string.Join(' ', annots.Select(a => Invariant($"{a} 0 R")))}]";
             pdf.Set(pageIds[k], Invariant($"<< /Type /Page /Parent {pagesId} 0 R /MediaBox [0 0 {N(PageWidth)} {N(PageHeight)}] /Resources {resources} 0 R /Contents {contents} 0 R{annotRefs} >>"));
+        }
+
+        foreach (var target in unresolved)
+        {
+            warnings.WriteLine($"warning: link '{target}' matches no heading");
         }
 
         pdf.Set(pagesId, Invariant($"<< /Type /Pages /Kids [{string.Join(' ', pageIds.Select(id => Invariant($"{id} 0 R")))}] /Count {pages.Count} >>"));

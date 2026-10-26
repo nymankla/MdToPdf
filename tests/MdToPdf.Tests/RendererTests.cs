@@ -216,6 +216,20 @@ public sealed partial class RendererTests
     public void OutlineKeepsCharactersThePageFontsLack() => Outline(PdfDoc.Render("# Ω"), "Ω");
 
     [Fact]
+    public void OutlineKeepsSymbolsThePageShowsAsStandIns()
+    {
+        var doc = PdfDoc.Render("# a → b");
+        Outline(doc, "a → b");
+        Run(doc, "a -> b");
+    }
+
+    [Fact]
+    public void EntitiesGetTheSameStandInsAsLiterals() => Run(PdfDoc.Render("a → b &#8594; c"), "a -> b -> c");
+
+    [Fact]
+    public void CodeBlocksGetStandIns() => Run(PdfDoc.Render("```\nx → y\n```"), "x -> y");
+
+    [Fact]
     public void InternalLinkJumpsToHeadingSlug()
     {
         var doc = PdfDoc.Render("# Hello, World!\n\n[go](#hello-world)");
@@ -240,7 +254,39 @@ public sealed partial class RendererTests
     }
 
     [Fact]
+    public void LongerHeadingDoesNotShiftDuplicateNumbering()
+    {
+        var doc = PdfDoc.Render("# Intro\n\n# Intro Part\n\n# Intro\n\n[x](#intro-1)");
+        var intros = doc.ObjectsContaining($"/Title {PdfWriter.TextString("Intro")} ").Select(DestOf).ToList();
+        Assert.Equal(intros[1], DestOf(Assert.Single(Annotations(doc))));
+    }
+
+    [Fact]
+    public void DuplicateNumberingSkipsTakenSlugs()
+    {
+        // "A 1" takes "a-1", so the second "A" becomes "a-2" (as on GitHub).
+        var doc = PdfDoc.Render("# A\n\n# A 1\n\n# A\n\n[x](#a-2)");
+        var dests = doc.ObjectsContaining($"/Title {PdfWriter.TextString("A")} ").Select(DestOf).ToList();
+        Assert.Equal(dests[1], DestOf(Assert.Single(Annotations(doc))));
+    }
+
+    [Fact]
     public void UnknownAnchorMakesNoAnnotation() => Assert.Empty(Annotations(PdfDoc.Render("[x](#nowhere)")));
+
+    [Fact]
+    public void UnknownAnchorWarnsOnce()
+    {
+        using var warnings = new StringWriter();
+        PdfDoc.Render("[x](#nowhere) [y](#nowhere)", warnings: warnings);
+        Assert.Equal("warning: link '#nowhere' matches no heading", warnings.ToString().Trim());
+    }
+
+    [Fact]
+    public void NonAsciiUriIsPercentEncoded()
+    {
+        var doc = PdfDoc.Render("[x](https://sv.wikipedia.org/wiki/Göteborg)");
+        Assert.Contains("/URI (https://sv.wikipedia.org/wiki/G%C3%B6teborg)", Assert.Single(Annotations(doc)), StringComparison.Ordinal);
+    }
 
     [Fact]
     public void ExternalLinkIsUriActionInLinkColor()
@@ -362,6 +408,41 @@ public sealed partial class RendererTests
         {
             Assert.Single(doc.Runs(p), r => r.Text == "Head");
         }
+    }
+
+    [Fact]
+    public void RowTallerThanPageSplitsAcrossPages()
+    {
+        var words = Enumerable.Range(0, 1500).Select(i => $"w{i}").ToList();
+        var doc = PdfDoc.Render($"| Key | Head |\n|---|---|\n| k | {string.Join(' ', words)} |");
+
+        Assert.True(doc.PageCount > 2);
+        Assert.All(Body(doc), r => Assert.True(r.Y >= Margin, $"'{r.Text}' drawn below the margin at y={r.Y}"));
+        Assert.Equal(words, Body(doc).SelectMany(r => r.Text.Split(' ')).Where(w => w.StartsWith('w')));
+        for (var p = 0; p < doc.PageCount; p++)
+        {
+            Assert.Single(doc.Runs(p), r => r.Text == "Head");
+        }
+
+        Assert.Single(Body(doc), r => r.Text == "k");
+    }
+
+    [Fact]
+    public void RowThatFitsOnAFreshPageMovesWhole()
+    {
+        var tall = string.Join("<br>", Enumerable.Range(0, 20).Select(i => $"line{i}"));
+        var doc = PdfDoc.Render($"{Paragraphs(40)}\n\n| H |\n|---|\n| {tall} |");
+        Assert.Equal(2, doc.PageCount);
+        Assert.All(Enumerable.Range(0, 20), i => Assert.Single(doc.Runs(1), r => r.Text == $"line{i}"));
+    }
+
+    [Fact]
+    public void HugeTableCellLaysOutInLinearTime()
+    {
+        var cell = string.Join(' ', Enumerable.Range(0, 40_000).Select(i => $"w{i}"));
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+        PdfDoc.Render($"| A | B |\n|---|---|\n| x | {cell} |");
+        Assert.True(watch.Elapsed < TimeSpan.FromSeconds(10), $"took {watch.Elapsed}"); // quadratic took ~20 s
     }
 
     [Fact]
