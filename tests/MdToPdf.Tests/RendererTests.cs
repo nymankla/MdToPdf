@@ -53,6 +53,32 @@ public sealed partial class RendererTests
     }
 
     [Fact]
+    public void LetterPagesUseLetterSizeAndWidth()
+    {
+        var doc = PdfDoc.Render(string.Join(' ', Enumerable.Repeat("a", 400)), paper: Paper.Letter);
+        Assert.Contains("/MediaBox [0 0 612 792]", doc.Objects[doc.PageIds[0]], StringComparison.Ordinal);
+
+        // Lines fill the wider Letter column, past where A4's right margin would be.
+        var right = Body(doc).Max(r => r.X + Fonts.Width(r.Text, (FontId)r.Font, r.Size));
+        Assert.InRange(right, Margin + ContentWidth, 612 - Margin);
+
+        var footer = Assert.Single(doc.Runs(0), r => r.Text == "1 / 1");
+        Assert.Equal(612 / 2.0, footer.X + (Fonts.Width(footer.Text, FontId.Regular, 8) / 2), 1);
+    }
+
+    [Fact]
+    public void LetterPagesBreakEarlierThanA4() =>
+        Assert.True(PdfDoc.Render(Paragraphs(150), paper: Paper.Letter).PageCount > PdfDoc.Render(Paragraphs(150)).PageCount);
+
+    [Theory]
+    [InlineData("a4", 595.28)]
+    [InlineData("LETTER", 612)]
+    public void PaperIsFoundByNameIgnoringCase(string name, double width) => Assert.Equal(width, Paper.Find(name)?.Width);
+
+    [Fact]
+    public void UnknownPaperIsNull() => Assert.Null(Paper.Find("a5"));
+
+    [Fact]
     public void XrefOffsetsPointAtObjects()
     {
         var doc = PdfDoc.Render("# Title\n\n[link](#title)\n\n| a |\n|---|\n| b |");

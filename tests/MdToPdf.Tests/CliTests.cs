@@ -96,6 +96,73 @@ public sealed class CliTests
         Assert.Equal("notes", Title(Path.ChangeExtension(input, ".pdf")));
     }
 
+    private static string MediaBox(string pdfPath)
+    {
+        var doc = PdfDoc.Parse(File.ReadAllBytes(pdfPath));
+        var page = doc.Objects[doc.PageIds[0]];
+        var start = page.IndexOf("/MediaBox [", StringComparison.Ordinal);
+        return page[start..(page.IndexOf(']', start) + 1)];
+    }
+
+    [Fact]
+    public void DefaultPaperIsA4()
+    {
+        using var dir = new TempDir();
+        var input = dir.File("doc.md", "Hello");
+        Assert.Equal(0, Run(input).Code);
+        Assert.Equal("/MediaBox [0 0 595.28 841.89]", MediaBox(Path.ChangeExtension(input, ".pdf")));
+    }
+
+    [Theory]
+    [InlineData("--paper", "letter", "{in}")]
+    [InlineData("{in}", "--paper", "Letter")]
+    [InlineData("--paper=letter", "{in}", "{out}")]
+    [InlineData("{in}", "{out}", "--paper", "LETTER")]
+    public void PaperOptionSelectsLetter(params string[] args)
+    {
+        using var dir = new TempDir();
+        var input = dir.File("doc.md", "Hello");
+        var output = Path.Combine(dir.Path, "out.pdf");
+        var resolved = args.Select(a => a.Replace("{in}", input, StringComparison.Ordinal).Replace("{out}", output, StringComparison.Ordinal)).ToArray();
+
+        var (code, @out, err) = Run(resolved);
+        Assert.Equal(0, code);
+        Assert.Empty(err);
+        Assert.Equal("/MediaBox [0 0 612 792]", MediaBox(@out.Trim()));
+    }
+
+    [Fact]
+    public void PaperOptionCanBeSetBackToA4()
+    {
+        using var dir = new TempDir();
+        var input = dir.File("doc.md", "Hello");
+        Assert.Equal(0, Run("--paper", "letter", "--paper=a4", input).Code);
+        Assert.Equal("/MediaBox [0 0 595.28 841.89]", MediaBox(Path.ChangeExtension(input, ".pdf")));
+    }
+
+    [Theory]
+    [InlineData("--paper", "a5")]
+    [InlineData("--paper=")]
+    [InlineData("--paper")]
+    public void UnknownPaperFails(params string[] option)
+    {
+        using var dir = new TempDir();
+        var input = dir.File("doc.md", "Hello");
+        var (code, @out, err) = Run([input, .. option]);
+        Assert.Equal(1, code);
+        Assert.Empty(@out);
+        Assert.StartsWith("error: unknown paper size", err, StringComparison.Ordinal);
+        Assert.False(File.Exists(Path.ChangeExtension(input, ".pdf")));
+    }
+
+    [Fact]
+    public void UnknownOptionPrintsUsage()
+    {
+        var (code, _, err) = Run("--landscape", "doc.md");
+        Assert.Equal(1, code);
+        Assert.StartsWith("Usage: mdtopdf [--paper a4|letter]", err, StringComparison.Ordinal);
+    }
+
     [Fact]
     public void LockedOutputFailsWithoutTouchingIt()
     {

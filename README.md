@@ -4,10 +4,10 @@ A small, dependency-free Markdown → PDF converter in C#. No NuGet packages and
 browser. The only dependency is the .NET base class library. It builds to a ~1.8 MB native exe that requires Windows 11.
 
 ```
-mdtopdf <input.md> [output.pdf]
+mdtopdf [--paper a4|letter] <input.md> [output.pdf]
 ```
 
-If you leave out the output path, the PDF is written next to the input file.
+If you leave out the output path, the PDF is written next to the input file. Pages are A4 unless you pass `--paper letter`.
 
 ## Supported Markdown
 
@@ -24,7 +24,7 @@ If you leave out the output path, the PDF is written next to the input file.
 
 The PDF output also includes:
 
-- A4 pages with page numbers in the footer.
+- A4 (default) or US Letter pages with page numbers in the footer.
 - Bookmarks built from the headings.
 - Clickable links.
 - Table headers that repeat on each new page.

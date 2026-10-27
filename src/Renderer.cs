@@ -12,11 +12,21 @@ internal readonly record struct Rgb(double R, double G, double B)
     public string Stroke => $"{Renderer.N(R)} {Renderer.N(G)} {Renderer.N(B)} RG";
 }
 
-/// <summary>Lays out Markdown blocks onto A4 pages and serializes them to PDF.</summary>
+/// <summary>A page size in PDF points (1/72 inch).</summary>
+internal sealed record Paper(string Name, double Width, double Height)
+{
+    public static readonly Paper A4 = new("a4", 595.28, 841.89);
+    public static readonly Paper Letter = new("letter", 612, 792);
+
+    /// <summary>Looks a paper size up by name, ignoring case; null when unknown.</summary>
+    public static Paper? Find(string name) =>
+        new[] { A4, Letter }.FirstOrDefault(p => p.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
+}
+
+/// <summary>Lays out Markdown blocks onto pages (A4 by default) and serializes them to PDF.</summary>
 internal sealed class Renderer
 {
-    private const double PageWidth = 595.28, PageHeight = 841.89, Margin = 56;
-    private const double Top = PageHeight - Margin, Bottom = Margin, ContentWidth = PageWidth - (2 * Margin);
+    private const double Margin = 56, Bottom = Margin;
     private const double BaseSize = 10.5, Leading = 1.45, BlockGap = 8, ItemGap = 3;
     private const double CodeSize = 9, CodePad = 8, CellPadX = 6, CellPadY = 4;
     private const double Epsilon = 0.01; // absorbs float error when a column is sized to its exact content
@@ -60,18 +70,26 @@ internal sealed class Renderer
     private readonly Dictionary<string, PdfImage?> images = [];
     private readonly string baseDir;
     private readonly TextWriter warnings;
+    private readonly Paper paper;
     private Page page;
     private double y;
     private Rgb ink = Ink;
 
     /// <param name="baseDir">Directory that relative image paths resolve against.</param>
     /// <param name="warnings">Receives non-fatal problems (missing images, unresolved anchors).</param>
-    public Renderer(string baseDir, TextWriter warnings)
+    /// <param name="paper">Page size; A4 when null.</param>
+    public Renderer(string baseDir, TextWriter warnings, Paper? paper = null)
     {
         this.baseDir = baseDir;
         this.warnings = warnings;
+        this.paper = paper ?? Paper.A4;
         NewPage();
     }
+
+    private double PageWidth => paper.Width;
+    private double PageHeight => paper.Height;
+    private double Top => PageHeight - Margin;
+    private double ContentWidth => PageWidth - (2 * Margin);
 
     internal static string N(double v) => Math.Round(v, 2).ToString("0.##", CultureInfo.InvariantCulture);
 
@@ -703,7 +721,7 @@ internal sealed class Renderer
         pdf.Save(output, catalog, info);
     }
 
-    private static string Dest(Anchor a, List<int> pageIds) => Invariant($"[{pageIds[a.Page]} 0 R /XYZ null {N(Math.Min(a.Y + 4, PageHeight))} null]");
+    private string Dest(Anchor a, List<int> pageIds) => Invariant($"[{pageIds[a.Page]} 0 R /XYZ null {N(Math.Min(a.Y + 4, PageHeight))} null]");
 
     /// <summary>Writes the heading tree as PDF bookmarks. Returns the outline root id, or 0 when there are no headings.</summary>
     private int WriteOutline(List<int> pageIds)
