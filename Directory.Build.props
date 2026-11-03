@@ -5,6 +5,8 @@
     <LangVersion>latest</LangVersion>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
+    <!-- Shared so tests run under the same globalization mode as the shipped exe. -->
+    <InvariantGlobalization>true</InvariantGlobalization>
 
     <!-- Lint: compiler + .NET analyzers + code style, all failing the build. -->
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>

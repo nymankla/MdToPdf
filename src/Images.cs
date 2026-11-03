@@ -1,14 +1,39 @@
 using System.Buffers.Binary;
 using System.Text;
-using static MdToPdf.PdfWriter;
+using static MdToPdf.PdfSyntax;
 
 namespace MdToPdf;
 
-internal sealed record PdfImage(int Id, int Width, int Height);
+/// <summary>An embedded image. The size is in pixels as displayed, so after any rotation by its EXIF orientation (1 is upright).</summary>
+internal sealed record PdfImage(int Id, int Width, int Height, int Orientation = 1)
+{
+    /// <summary>The placed size: 96 dpi, shrunk to fit the given box.</summary>
+    public (double Width, double Height) Fit(double maxWidth, double maxHeight)
+    {
+        double w = Width * 0.75, h = Height * 0.75;
+        var scale = Math.Min(1, Math.Min(maxWidth / w, maxHeight / h));
+        return (w * scale, h * scale);
+    }
 
-/// <summary>Embeds JPEG (passed through as-is) and PNG (passed through, or decoded when it has alpha).</summary>
+    /// <summary>The operands of <c>cm</c> that map the image's unit square onto the given box, undoing the EXIF orientation.</summary>
+    public string Matrix(double x, double y, double w, double h) => Orientation switch
+    {
+        2 => $"{N(-w)} 0 0 {N(h)} {N(x + w)} {N(y)}",
+        3 => $"{N(-w)} 0 0 {N(-h)} {N(x + w)} {N(y + h)}",
+        4 => $"{N(w)} 0 0 {N(-h)} {N(x)} {N(y + h)}",
+        5 => $"0 {N(-h)} {N(-w)} 0 {N(x + w)} {N(y + h)}",
+        6 => $"0 {N(-h)} {N(w)} 0 {N(x)} {N(y + h)}",
+        7 => $"0 {N(h)} {N(w)} 0 {N(x)} {N(y)}",
+        8 => $"0 {N(h)} {N(-w)} 0 {N(x + w)} {N(y)}",
+        _ => $"{N(w)} 0 0 {N(h)} {N(x)} {N(y)}",
+    };
+}
+
+/// <summary>Embeds JPEG (passed through as-is) and PNG (passed through, or decoded when it has transparency).</summary>
 internal static class Images
 {
+    private const int ExifOrientationTag = 0x0112;
+
     private static readonly byte[] PngSignature = [137, 80, 78, 71, 13, 10, 26, 10];
 
     /// <returns>The image, or null when the format is unsupported.</returns>
@@ -22,8 +47,12 @@ internal static class Images
         return data.AsSpan().StartsWith(PngSignature) ? Png(pdf, data) : null;
     }
 
+    private static string ImageDict(int w, int h, string colorSpace, int bits) =>
+        Invariant($"/Type /XObject /Subtype /Image /Width {w} /Height {h} /ColorSpace {colorSpace} /BitsPerComponent {bits}");
+
     private static PdfImage? Jpeg(PdfWriter pdf, byte[] d)
     {
+        var orientation = 1;
         for (var i = 2; i + 9 < d.Length;)
         {
             if (d[i] != 0xFF || d[i + 1] == 0xFF)
@@ -50,11 +79,49 @@ internal static class Images
                     4 => "/DeviceCMYK /Decode [1 0 1 0 1 0 1 0]", // Adobe CMYK JPEGs are stored inverted
                     _ => "/DeviceRGB",
                 };
-                var id = pdf.AddStream(Invariant($"/Type /XObject /Subtype /Image /Width {w} /Height {h} /ColorSpace {colorSpace} /BitsPerComponent 8 /Filter /DCTDecode"), d, compress: false);
-                return new PdfImage(id, w, h);
+                var id = pdf.AddStream(ImageDict(w, h, colorSpace, 8) + " /Filter /DCTDecode", d, compress: false);
+                return orientation >= 5 ? new PdfImage(id, h, w, orientation) : new PdfImage(id, w, h, orientation);
             }
 
-            i += 2 + BinaryPrimitives.ReadUInt16BigEndian(d.AsSpan(i + 2));
+            var length = BinaryPrimitives.ReadUInt16BigEndian(d.AsSpan(i + 2));
+            if (marker == 0xE1 && i + 2 + length <= d.Length && length >= 2)
+            {
+                orientation = ExifOrientation(d.AsSpan(i + 4, length - 2)) ?? orientation;
+            }
+
+            i += 2 + length;
+        }
+
+        return null;
+    }
+
+    /// <summary>Reads the orientation tag of an APP1 segment; null when it isn't valid EXIF. A photo with broken EXIF is still a photo.</summary>
+    private static int? ExifOrientation(ReadOnlySpan<byte> app1)
+    {
+        if (app1.Length < 14 || !app1.StartsWith("Exif\0\0"u8))
+        {
+            return null;
+        }
+
+        var tiff = app1[6..];
+        var bigEndian = tiff.StartsWith("MM"u8);
+        int Read16(ReadOnlySpan<byte> s) => bigEndian ? BinaryPrimitives.ReadUInt16BigEndian(s) : BinaryPrimitives.ReadUInt16LittleEndian(s);
+
+        var ifd = bigEndian ? BinaryPrimitives.ReadUInt32BigEndian(tiff[4..]) : BinaryPrimitives.ReadUInt32LittleEndian(tiff[4..]);
+        if (ifd + 2 > (uint)tiff.Length)
+        {
+            return null;
+        }
+
+        var entries = tiff[(int)ifd..];
+        var count = Read16(entries);
+        for (var k = 0; k < count && 2 + ((k + 1) * 12) <= entries.Length; k++)
+        {
+            var entry = entries.Slice(2 + (k * 12), 12);
+            if (Read16(entry) == ExifOrientationTag)
+            {
+                return Read16(entry[8..]) is >= 1 and <= 8 and var value ? value : null;
+            }
         }
 
         return null;
@@ -64,6 +131,7 @@ internal static class Images
     {
         int w = 0, h = 0, depth = 0, type = 0, interlace = 0;
         var palette = Array.Empty<byte>();
+        var transparency = Array.Empty<byte>();
         using var idat = new MemoryStream();
 
         for (var i = 8; i + 12 <= d.Length;)
@@ -80,6 +148,9 @@ internal static class Images
                 case "PLTE":
                     palette = body.ToArray();
                     break;
+                case "tRNS":
+                    transparency = body.ToArray();
+                    break;
                 case "IDAT":
                     idat.Write(body);
                     break;
@@ -90,7 +161,9 @@ internal static class Images
             i += 12 + len;
         }
 
-        if (w <= 0 || h <= 0 || interlace != 0 || (type is 4 or 6 && depth < 8))
+        var valid = w > 0 && h > 0 && interlace == 0 && type is 0 or 2 or 3 or 4 or 6
+            && !(type is 4 or 6 && depth < 8) && !(type == 3 && palette.Length == 0);
+        if (!valid)
         {
             return null;
         }
@@ -102,19 +175,25 @@ internal static class Images
             0 or 4 => "/DeviceGray",
             _ => "/DeviceRGB",
         };
-        var head = Invariant($"/Type /XObject /Subtype /Image /Width {w} /Height {h} /ColorSpace {colorSpace} /BitsPerComponent {depth}");
+        var head = ImageDict(w, h, colorSpace, depth);
 
         if (type is 0 or 2 or 3)
         {
             // PDF's Flate predictor 15 understands PNG row filters, so the data passes through untouched.
             var parms = Invariant($" /Filter /FlateDecode /DecodeParms << /Predictor 15 /Colors {colors} /BitsPerComponent {depth} /Columns {w} >>");
-            return new PdfImage(pdf.AddStream(head + parms, idat.ToArray(), compress: false), w, h);
+            var mask = type == 3 ? PaletteMask(pdf, idat, transparency, w, h, depth) : ColorKeyMask(transparency, colors, depth);
+            return mask is null ? null : new PdfImage(pdf.AddStream(head + parms + mask, idat.ToArray(), compress: false), w, h);
         }
 
         // Gray+alpha or RGBA: undo the row filters and split alpha into a soft mask.
         var sample = depth / 8;
         var pixel = (colors + 1) * sample;
-        var raw = Unfilter(Inflate(idat.ToArray()), w, h, pixel);
+        if (!FitsInMemory(w, h, pixel))
+        {
+            return null;
+        }
+
+        var raw = Unfilter(PdfWriter.Inflate(idat.ToArray(), (((long)w * pixel) + 1) * h), w * pixel, h, pixel);
         var color = new byte[w * h * colors * sample];
         var alpha = new byte[w * h * sample];
         for (int p = 0, ci = 0, ai = 0; p < raw.Length;)
@@ -130,13 +209,61 @@ internal static class Images
             }
         }
 
-        var mask = pdf.AddStream(Invariant($"/Type /XObject /Subtype /Image /Width {w} /Height {h} /ColorSpace /DeviceGray /BitsPerComponent {depth}"), alpha, compress: true);
-        return new PdfImage(pdf.AddStream(Invariant($"{head} /SMask {mask} 0 R"), color, compress: true), w, h);
+        var soft = pdf.AddStream(ImageDict(w, h, "/DeviceGray", depth), alpha, compress: true);
+        return new PdfImage(pdf.AddStream($"{head} /SMask {Ref(soft)}", color, compress: true), w, h);
     }
 
-    private static byte[] Unfilter(byte[] data, int w, int h, int pixel)
+    private static bool FitsInMemory(int w, int h, int pixel) => (long)w * h * pixel <= Limits.MaxDecodedImageBytes;
+
+    /// <summary>The tRNS chunk of a gray or RGB PNG names one color as transparent, which PDF's color key mask expresses directly.</summary>
+    private static string ColorKeyMask(byte[] transparency, int colors, int depth)
     {
-        var stride = w * pixel;
+        if (transparency.Length < colors * 2)
+        {
+            return "";
+        }
+
+        var ranges = Enumerable.Range(0, colors).Select(c =>
+        {
+            int value = BinaryPrimitives.ReadUInt16BigEndian(transparency.AsSpan(c * 2));
+            value &= (1 << depth) - 1;
+            return Invariant($"{value} {value}");
+        });
+        return $" /Mask [{string.Join(' ', ranges)}]";
+    }
+
+    /// <summary>The tRNS chunk of a palette PNG gives an alpha per palette entry, which takes a soft mask built from the pixels.
+    /// Returns the dictionary entry to add, or null when the image is too big to decode.</summary>
+    private static string? PaletteMask(PdfWriter pdf, MemoryStream idat, byte[] transparency, int w, int h, int depth)
+    {
+        if (transparency.Length == 0)
+        {
+            return "";
+        }
+
+        if (!FitsInMemory(w, h, 1))
+        {
+            return null;
+        }
+
+        var stride = (int)((((long)w * depth) + 7) / 8);
+        var raw = Unfilter(PdfWriter.Inflate(idat.ToArray(), ((long)stride + 1) * h), stride, h, 1);
+        var alpha = new byte[w * h];
+        for (var r = 0; r < h; r++)
+        {
+            for (var c = 0; c < w; c++)
+            {
+                var bit = c * depth;
+                var index = (raw[(r * stride) + (bit / 8)] >> (8 - depth - (bit % 8))) & ((1 << depth) - 1);
+                alpha[(r * w) + c] = index < transparency.Length ? transparency[index] : (byte)255;
+            }
+        }
+
+        return $" /SMask {Ref(pdf.AddStream(ImageDict(w, h, "/DeviceGray", 8), alpha, compress: true))}";
+    }
+
+    private static byte[] Unfilter(byte[] data, int stride, int h, int pixel)
+    {
         var result = new byte[h * stride];
         for (var r = 0; r < h; r++)
         {

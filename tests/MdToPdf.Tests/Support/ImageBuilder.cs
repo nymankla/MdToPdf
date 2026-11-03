@@ -8,7 +8,7 @@ namespace MdToPdf.Tests.Support;
 internal static class ImageBuilder
 {
     /// <summary>A PNG with the given (already filtered) scanlines. CRCs are zero: the reader doesn't check them.</summary>
-    public static byte[] Png(int w, int h, byte depth, byte type, byte[] scanlines, byte[]? palette = null, byte interlace = 0)
+    public static byte[] Png(int w, int h, byte depth, byte type, byte[] scanlines, byte[]? palette = null, byte interlace = 0, byte[]? transparency = null)
     {
         using var ms = new MemoryStream();
         ms.Write([137, 80, 78, 71, 13, 10, 26, 10]);
@@ -21,6 +21,11 @@ internal static class ImageBuilder
         if (palette is not null)
         {
             Chunk(ms, "PLTE", palette);
+        }
+
+        if (transparency is not null)
+        {
+            Chunk(ms, "tRNS", transparency);
         }
 
         // Split IDAT in two to check that the reader concatenates chunks.
@@ -65,11 +70,20 @@ internal static class ImageBuilder
     public static byte[] Unfiltered(byte[] raw, int w, int h, int pixel) => Filter(raw, w, h, pixel, new byte[h]);
 
     /// <summary>A JPEG header (SOI, APP0, optional RST, SOF0, EOI) — enough for dimension sniffing.</summary>
-    public static byte[] Jpeg(int w, int h, byte components, byte sofMarker = 0xC0, bool withRestartMarker = false)
+    public static byte[] Jpeg(int w, int h, byte components, byte sofMarker = 0xC0, bool withRestartMarker = false, byte[]? exif = null)
     {
         using var ms = new MemoryStream();
         ms.Write([0xFF, 0xD8]);
         ms.Write([0xFF, 0xE0, 0x00, 0x10, .. "JFIF\0"u8, 1, 1, 0, 0, 1, 0, 1, 0, 0]);
+        if (exif is not null)
+        {
+            Span<byte> length = stackalloc byte[2];
+            BinaryPrimitives.WriteUInt16BigEndian(length, (ushort)(exif.Length + 2));
+            ms.Write([0xFF, 0xE1]);
+            ms.Write(length);
+            ms.Write(exif);
+        }
+
         if (withRestartMarker)
         {
             ms.Write([0xFF, 0xD0]);
@@ -85,6 +99,40 @@ internal static class ImageBuilder
         ms.Write(sof);
         ms.Write([0xFF, 0xD9]);
         return ms.ToArray();
+    }
+
+    /// <summary>An APP1 body whose only EXIF tag is the given orientation.</summary>
+    public static byte[] ExifOrientation(ushort orientation, bool bigEndian)
+    {
+        void Write16(Span<byte> s, ushort v)
+        {
+            if (bigEndian)
+            {
+                BinaryPrimitives.WriteUInt16BigEndian(s, v);
+            }
+            else
+            {
+                BinaryPrimitives.WriteUInt16LittleEndian(s, v);
+            }
+        }
+
+        var tiff = new byte[8 + 2 + 12];
+        (tiff[0], tiff[1]) = bigEndian ? ((byte)'M', (byte)'M') : ((byte)'I', (byte)'I');
+        Write16(tiff.AsSpan(2), 42);
+        if (bigEndian)
+        {
+            BinaryPrimitives.WriteUInt32BigEndian(tiff.AsSpan(4), 8);
+        }
+        else
+        {
+            BinaryPrimitives.WriteUInt32LittleEndian(tiff.AsSpan(4), 8);
+        }
+
+        Write16(tiff.AsSpan(8), 1);
+        Write16(tiff.AsSpan(10), 0x0112);
+        Write16(tiff.AsSpan(12), 3);
+        Write16(tiff.AsSpan(18), orientation);
+        return [.. "Exif\0\0"u8, .. tiff];
     }
 
     private static void Chunk(Stream s, string type, ReadOnlySpan<byte> body)

@@ -1,0 +1,47 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build:
+    # Windows only: the target framework is net10.0-windows.
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Build
+        run: dotnet build
+
+      - name: Lint
+        run: |
+          dotnet format --verify-no-changes
+          dotnet format tests\MdToPdf.Tests --verify-no-changes
+
+      - name: Test
+        run: dotnet test --project tests\MdToPdf.Tests
+
+      # The native exe is what ships, and AOT trimming can change behavior, so it gets its own run.
+      - name: Publish
+        run: dotnet publish -c Release -r win-x64 -o publish
+
+      - name: Smoke test the native exe
+        run: .\scripts\smoke-test.ps1 -Exe publish\mdtopdf.exe
+
+      - name: Install qpdf
+        run: choco install qpdf --no-progress -y
+
+      # An independent parser: the test suite only reads PDFs through its own helper.
+      - name: Check the PDFs with qpdf
+        run: |
+          $env:PATH = "C:\Program Files\qpdf\bin;$env:PATH"
+          Get-ChildItem smoke-output\*.pdf | ForEach-Object {
+            qpdf --check $_.FullName
+            if ($LASTEXITCODE -ne 0) { exit 1 }
+          }
