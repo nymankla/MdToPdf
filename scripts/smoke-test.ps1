@@ -24,15 +24,19 @@ function Fail([string]$message) {
 }
 
 # Each sample must convert. Warnings are fine: the tour shows a missing image on purpose.
-foreach ($sample in Get-ChildItem (Join-Path $root 'samples\*.md')) {
+foreach ($sample in Get-ChildItem (Join-Path $root 'samples/*.md')) {
     $output = Join-Path $OutDir ($sample.BaseName + '.pdf')
     & $Exe --toc $sample.FullName $output 2>$null | Out-Null
     if ($LASTEXITCODE -ne 0) { Fail "$($sample.Name): exit code $LASTEXITCODE" }
     if ((Get-Item $output).Length -lt 500) { Fail "$($sample.Name): output is too small" }
 }
 
+# The exe must report the version in Directory.Build.props, and carry it in its file properties too.
+$expected = ([xml](Get-Content (Join-Path $root 'Directory.Build.props') -Raw)).Project.PropertyGroup.Version | Where-Object { $_ } | Select-Object -First 1
 $version = & $Exe --version
-if ($version -notmatch '^mdtopdf \d+\.\d+\.\d+$') { Fail "unexpected version output: $version" }
+if ($version -ne "mdtopdf $expected") { Fail "expected version $expected, got: $version" }
+$fileVersion = (Get-Item $Exe).VersionInfo.FileVersion
+if ($fileVersion -ne $expected) { Fail "expected file version $expected, got: $fileVersion" }
 
 # Decomposed accents compose only through our own table, because InvariantGlobalization disables Normalize.
 $accents = Join-Path $OutDir 'accents.md'
@@ -44,7 +48,8 @@ if ($warnings) { Fail "decomposed accents were not composed: $warnings" }
 $tall = Join-Path $OutDir 'tall-header.md'
 $header = (1..80 | ForEach-Object { "h$_" }) -join '<br>'
 [IO.File]::WriteAllText($tall, "| $header | b |`n|---|---|`n| 1 | 2 |`n")
-$process = Start-Process -FilePath $Exe -ArgumentList "`"$tall`"" -PassThru -WindowStyle Hidden
+$start = New-Object Diagnostics.ProcessStartInfo -Property @{ FileName = $Exe; Arguments = "`"$tall`""; UseShellExecute = $false; CreateNoWindow = $true }
+$process = [Diagnostics.Process]::Start($start)
 if (-not $process.WaitForExit(30000)) {
     Stop-Process -Id $process.Id -Force
     Fail 'tall table header did not finish'

@@ -484,7 +484,7 @@ public sealed class CliTests
     {
         var (code, @out, _) = Run("--version");
         Assert.Equal(0, code);
-        Assert.Matches(@"^mdtopdf \d+\.\d+\.\d+\s*$", @out);
+        Assert.Matches(@"^mdtopdf \d+\.\d+\.\d+\.\d+\s*$", @out);
     }
 
     [Theory]

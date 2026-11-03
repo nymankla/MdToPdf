@@ -4,7 +4,6 @@
     <OutputType>Exe</OutputType>
     <AssemblyName>mdtopdf</AssemblyName>
     <RootNamespace>MdToPdf</RootNamespace>
-    <Version>1.1.0</Version>
 
     <!-- Lean: native single-file exe, no resource strings. -->
     <PublishAot>true</PublishAot>

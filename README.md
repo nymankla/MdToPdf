@@ -72,6 +72,18 @@ dotnet publish -c Release -r win-x64 -o publish
 .\scripts\smoke-test.ps1 -Exe publish\mdtopdf.exe  # checks the native exe itself
 ```
 
+## Releases
+
+The version lives in `Directory.Build.props` and has four parts. It reaches the exe's `--version` output and its file properties.
+
+```powershell
+.\scripts\release.ps1 patch            # or major, minor, revision
+.\scripts\release.ps1 -Version 2.0.0.0  # an exact version
+.\scripts\release.ps1 patch -DryRun     # only run the checks
+```
+
+The script checks that `main` is clean and in sync with GitHub, runs the tests, then commits the bump, tags it `v<version>` and pushes both together. The tag starts the release workflow, which runs the full CI build and publishes a GitHub release with `mdtopdf-<version>-win-x64.zip` and `SHA256SUMS`. A tag that doesn't match `Directory.Build.props` fails before anything is built.
+
 ## Layout
 
 | File | Purpose |
@@ -93,4 +105,5 @@ dotnet publish -c Release -r win-x64 -o publish
 | `src/Cli.cs` | Argument handling, file I/O and exit codes |
 | `samples/` | Feature tours and page-break stress tests |
 | `scripts/smoke-test.ps1` | Checks of the published native exe, also run in CI |
+| `scripts/release.ps1` | Bumps the version, then commits, tags and pushes a release |
 | `tests/MdToPdf.Tests/` | xUnit tests, one class per source file |

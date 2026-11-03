@@ -20,6 +20,8 @@ dotnet publish -c Release -r win-x64 -o publish # native AOT exe; needs VS C++ b
 .\scripts\smoke-test.ps1 -Exe publish\mdtopdf.exe  # checks the native exe; CI runs it too
 ```
 
+Release with `.\scripts\release.ps1 patch` (or `major`, `minor`, `revision`, or `-Version 1.2.3.4`). It bumps the four-part `<Version>` in `Directory.Build.props`, commits, tags `v<version>` and pushes; the tag triggers `.github/workflows/release.yml`. That workflow reuses `ci.yml` through `workflow_call`, so a release passes the same checks as a pull request. Don't hand-edit the version or set one in the csproj: the smoke test and the release workflow both compare against that file.
+
 If `publish` can't find vswhere, run `$env:PATH = "C:\Program Files (x86)\Microsoft Visual Studio\Installer;$env:PATH"` first.
 
 There's no solution file on purpose. With one, the repo root would hold both a `.csproj` and a `.sln`, and a plain `dotnet build` would fail because it couldn't choose. `global.json` opts `dotnet test` into Microsoft.Testing.Platform. The .NET 10+ SDK no longer runs xUnit v3 through VSTest.

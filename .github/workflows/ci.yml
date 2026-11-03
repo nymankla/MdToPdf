@@ -4,6 +4,10 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_call: # the release workflow builds its artifact through this one
+
+permissions:
+  contents: read
 
 jobs:
   build:
@@ -22,6 +26,7 @@ jobs:
       - name: Lint
         run: |
           dotnet format --verify-no-changes
+          if ($LASTEXITCODE -ne 0) { exit 1 }
           dotnet format tests\MdToPdf.Tests --verify-no-changes
 
       - name: Test
@@ -45,3 +50,9 @@ jobs:
             qpdf --check $_.FullName
             if ($LASTEXITCODE -ne 0) { exit 1 }
           }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mdtopdf-win-x64
+          path: publish/mdtopdf.exe
+          if-no-files-found: error
