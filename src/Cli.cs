@@ -38,7 +38,7 @@ internal static class Cli
 
         if (args is ["--version"])
         {
-            stdout.WriteLine($"mdtopdf {Assembly.GetExecutingAssembly().GetName().Version?.ToString(3)}");
+            stdout.WriteLine($"mdtopdf {Assembly.GetExecutingAssembly().GetName().Version}");
             return 0;
         }
 
