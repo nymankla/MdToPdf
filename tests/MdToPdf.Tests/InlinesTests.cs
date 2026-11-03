@@ -102,9 +102,9 @@ public sealed class InlinesTests
         Assert.Equal(new Inline("https://a.b", Style.None, "https://c.d"), One("[https://a.b](https://c.d)"));
 
     [Fact]
-    public void InlineImageShowsAltInItalic() =>
+    public void InlineImageKeepsAltInItalicForWhenItCantBeEmbedded() =>
         Assert.Equal(
-            [new("see ", Style.None, null), new("alt", Style.Italic, null)],
+            [new("see ", Style.None, null), new("alt", Style.Italic, null, "x.png")],
             Inlines.Parse("see ![alt](x.png)"));
 
     // ---------------------------------------------------------------- escapes, breaks, entities
@@ -138,4 +138,152 @@ public sealed class InlinesTests
 
     [Fact]
     public void PlainTextTurnsBreaksIntoSpaces() => Assert.Equal("a b c", Plain("a<br>b *c*"));
+
+    // ---------------------------------------------------------------- entities and link forms
+
+    [Theory]
+    [InlineData("&auml;&aring;&ouml;&Auml;&Aring;&Ouml;", "äåöÄÅÖ")]
+    [InlineData("&eacute;&szlig;&bull;", "éß•")]
+    [InlineData("&ldquo;q&rdquo; &rarr;", "“q” →")]
+    [InlineData("&frac12;&sup2;", "½²")]
+    [InlineData("&#128;&#150;", "€–")]
+    [InlineData("&#x1F600;", "😀")]
+    public void MoreEntities(string md, string text) => Assert.Equal(text, One(md).Text);
+
+    [Fact]
+    public void NbspEntityIsANonBreakingSpace() => Assert.Equal("a\u00A0b", One("a&nbsp;b").Text);
+
+    [Theory]
+    [InlineData("[a](<my file.pdf>)", "my file.pdf")]
+    [InlineData("[a](<my file.pdf> \"title\")", "my file.pdf")]
+    [InlineData(@"[a](b\)c)", "b)c")]
+    [InlineData("[a](x?a=1&amp;b=2)", "x?a=1&b=2")]
+    [InlineData(@"[a](u\_v)", "u_v")]
+    public void LinkDestinationForms(string md, string url) => Assert.Equal(url, One(md).Link);
+
+    [Theory]
+    [InlineData("before <!-- hidden --> after", "before  after")]
+    [InlineData("<!-- x -->after", "after")]
+    [InlineData("a <!-- b\nc --> d", "a  d")]
+    [InlineData("a <!-- unclosed", "a <!-- unclosed")]
+    [InlineData("`<!-- code -->`", "<!-- code -->")]
+    public void InlineComments(string md, string text) => Assert.Equal(text, Plain(md));
+
+    // ---------------------------------------------------------------- mixed emphasis
+
+    [Fact]
+    public void ShorterInnerRunClosesFirst() =>
+        Assert.Equal(
+            [new("a", Style.Bold, null), new("b", Style.Bold | Style.Italic, null)],
+            Inlines.Parse("**a*b***"));
+
+    [Fact]
+    public void TripleOpenerSplitsBetweenTwoClosers() =>
+        Assert.Equal(
+            [new("a", Style.Bold | Style.Italic, null), new(" b", Style.Italic, null)],
+            Inlines.Parse("***a** b*"));
+
+    [Fact]
+    public void TripleCloserSplitsBetweenTwoOpeners() =>
+        Assert.Equal(
+            [new("a ", Style.Italic, null), new("b", Style.Bold | Style.Italic, null)],
+            Inlines.Parse("*a **b***"));
+
+    [Fact]
+    public void NearestOpenerWinsAndLeavesAMarkerOver() =>
+        Assert.Equal([new("*", Style.None, null), new("a b", Style.Italic, null)], Inlines.Parse("**a *b**"));
+
+    [Fact]
+    public void ExtraOpeningMarkerStaysLiteral() =>
+        Assert.Equal([new("*", Style.None, null), new("a", Style.Bold, null)], Inlines.Parse("***a**"));
+
+    [Fact]
+    public void StyleSpansAcrossLinkAndCode() =>
+        Assert.Equal(
+            [new("l", Style.Italic, "u"), new("c", Style.Italic | Style.Code, null)],
+            Inlines.Parse("*[l](u)`c`*"));
+
+    [Theory]
+    [InlineData("foo*bar*", "bar", (int)Style.Italic)]
+    [InlineData("foo**bar**baz", "bar", (int)Style.Bold)]
+    [InlineData("(*a*)", "a", (int)Style.Italic)]
+    public void IntrawordAsterisksEmphasize(string md, string text, int style) =>
+        Assert.Contains(new Inline(text, (Style)style, null), Inlines.Parse(md));
+
+    [Fact]
+    public void IntrawordUnderscoresStayLiteral() => Assert.Equal("foo_bar_baz", One("foo_bar_baz").Text);
+
+    [Fact]
+    public void ThreeTildesAreLiteral() => Assert.Equal("~~~a~~~", One("~~~a~~~").Text);
+
+    // ---------------------------------------------------------------- references
+
+    private static InlineContext Context()
+    {
+        var context = new InlineContext();
+        context.DefineLink("Ref One", "http://one");
+        context.DefineFootnote("note", ["The note."]);
+        return context;
+    }
+
+    [Theory]
+    [InlineData("[text][ref one]", "text")]
+    [InlineData("[ref one][]", "ref one")]
+    [InlineData("[ref one]", "ref one")]
+    [InlineData("[REF   ONE]", "REF ONE")]
+    public void ReferenceLinks(string md, string text)
+    {
+        var link = Assert.Single(Inlines.Parse(md, Context()));
+        Assert.Equal("http://one", link.Link);
+        Assert.Equal(string.Join(' ', text.Split(' ', StringSplitOptions.RemoveEmptyEntries)), string.Join(' ', link.Text.Split(' ', StringSplitOptions.RemoveEmptyEntries)));
+    }
+
+    [Theory]
+    [InlineData("[text][nope]")]
+    [InlineData("[nope][]")]
+    [InlineData("[nope]")]
+    public void UnknownReferenceStaysLiteral(string md) => Assert.Equal(new Inline(md, Style.None, null), Assert.Single(Inlines.Parse(md, Context())));
+
+    [Fact]
+    public void ImageByReference() => Assert.Equal("http://one", Assert.Single(Inlines.Parse("![alt][ref one]", Context())).Image);
+
+    [Fact]
+    public void FootnoteReferenceIsASuperscriptLink()
+    {
+        var reference = Assert.Single(Inlines.Parse("[^note]", Context()));
+        Assert.Equal(new Inline("1", Style.Super, "#^1"), reference);
+    }
+
+    [Fact]
+    public void RepeatedFootnoteKeepsItsNumber()
+    {
+        var context = Context();
+        context.DefineFootnote("other", ["Other."]);
+        Assert.Equal(["1", " ", "2", " ", "1"], Inlines.Parse("[^note] [^other] [^note]", context).Select(i => i.Text));
+        Assert.Equal(2, context.ReferencedNotes.Count);
+    }
+
+    [Fact]
+    public void UnknownFootnoteStaysLiteral() => Assert.Equal("[^nope]", One("[^nope]").Text);
+
+    // ---------------------------------------------------------------- image detection
+
+    [Theory]
+    [InlineData("![a](b.png)", "b.png", "a")]
+    [InlineData("![a](img(1).png)", "img(1).png", "a")]
+    [InlineData("![a](<my pic.png>)", "my pic.png", "a")]
+    [InlineData("![a](b.png 'title')", "b.png", "a")]
+    [InlineData("![a][ref one]", "http://one", "a")]
+    public void WholeTextIsOneImage(string text, string source, string alt)
+    {
+        Assert.True(Inlines.TryImageOnly(text, Context(), out var s, out var a));
+        Assert.Equal((source, alt), (s, a));
+    }
+
+    [Theory]
+    [InlineData("![a](b.png) text")]
+    [InlineData("text ![a](b.png)")]
+    [InlineData("[a](b.png)")]
+    [InlineData("![a]")]
+    public void NotOneImage(string text) => Assert.False(Inlines.TryImageOnly(text, Context(), out _, out _));
 }

@@ -4,12 +4,14 @@
     <OutputType>Exe</OutputType>
     <AssemblyName>mdtopdf</AssemblyName>
     <RootNamespace>MdToPdf</RootNamespace>
+    <Version>1.1.0</Version>
 
-    <!-- Lean: native single-file exe, no ICU, no resource strings. -->
+    <!-- Lean: native single-file exe, no resource strings. -->
     <PublishAot>true</PublishAot>
-    <InvariantGlobalization>true</InvariantGlobalization>
     <UseSystemResourceKeys>true</UseSystemResourceKeys>
     <OptimizationPreference>Size</OptimizationPreference>
+    <!-- Saves about 177 KB. An unexpected crash no longer names methods; normal errors and warnings are unaffected. -->
+    <StackTraceSupport>false</StackTraceSupport>
     <!-- The XML doc file exists only to enable IDE0005; don't ship it. -->
     <PublishDocumentationFile>false</PublishDocumentationFile>
   </PropertyGroup>

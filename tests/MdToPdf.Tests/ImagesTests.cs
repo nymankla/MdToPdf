@@ -172,4 +172,154 @@ public sealed class ImagesTests
         Assert.NotNull(img);
         Assert.True(img.Width > 0 && img.Height > 0);
     }
+
+    // ---------------------------------------------------------------- limits
+
+    [Fact]
+    public void HugeDecodedImageIsRefusedWithoutAllocating()
+    {
+        var png = ImageBuilder.Png(30000, 30000, 8, 6, new byte[16]);
+        Assert.Null(Embed(png).Image);
+    }
+
+    [Fact]
+    public void HugePaletteMaskIsRefused()
+    {
+        var png = ImageBuilder.Png(60000, 60000, 8, 3, new byte[16], palette: [1, 2, 3], transparency: [0]);
+        Assert.Null(Embed(png).Image);
+    }
+
+    [Fact]
+    public void DataInflatingBeyondTheImageSizeIsCorrupt()
+    {
+        var png = ImageBuilder.Png(1, 1, 8, 6, new byte[100_000]);
+        Assert.Throws<InvalidDataException>(() => Embed(png));
+    }
+
+    [Theory]
+    [InlineData(5)] // no such color type
+    [InlineData(7)]
+    public void UnknownColorTypeIsUnsupported(byte type) => Assert.Null(Embed(ImageBuilder.Png(1, 1, 8, type, [0, 0])).Image);
+
+    [Fact]
+    public void PaletteImageWithoutPaletteIsUnsupported() => Assert.Null(Embed(ImageBuilder.Png(1, 1, 8, 3, [0, 0])).Image);
+
+    // ---------------------------------------------------------------- PNG transparency
+
+    [Fact]
+    public void PaletteTransparencyBecomesASoftMask()
+    {
+        var png = ImageBuilder.Png(2, 1, 8, 3, [0, 0, 1], palette: [1, 2, 3, 4, 5, 6], transparency: [0]);
+        var (img, doc) = Embed(png);
+        var dict = doc.Objects[img!.Id];
+        Assert.Contains("/Predictor 15", dict, StringComparison.Ordinal);
+        var mask = PdfDoc.Refs(dict[dict.IndexOf("/SMask", StringComparison.Ordinal)..])[0];
+        Assert.Equal(new byte[] { 0, 255 }, doc.Streams[mask]); // entry 0 is transparent, entry 1 has no alpha listed
+    }
+
+    [Fact]
+    public void PaletteTransparencyHandlesPackedPixels()
+    {
+        // Two bits per pixel: indexes 0, 1, 2, 3 in one byte.
+        var png = ImageBuilder.Png(4, 1, 2, 3, [0, 0b00_01_10_11], palette: new byte[12], transparency: [10, 20, 30]);
+        var (img, doc) = Embed(png);
+        var dict = doc.Objects[img!.Id];
+        var mask = PdfDoc.Refs(dict[dict.IndexOf("/SMask", StringComparison.Ordinal)..])[0];
+        Assert.Equal(new byte[] { 10, 20, 30, 255 }, doc.Streams[mask]);
+    }
+
+    [Fact]
+    public void PaletteTransparencyUndoesRowFilters()
+    {
+        var png = ImageBuilder.Png(2, 2, 8, 3, ImageBuilder.Filter([0, 1, 1, 0], 2, 2, 1, [1, 2]), palette: new byte[6], transparency: [50]);
+        var (img, doc) = Embed(png);
+        var dict = doc.Objects[img!.Id];
+        var mask = PdfDoc.Refs(dict[dict.IndexOf("/SMask", StringComparison.Ordinal)..])[0];
+        Assert.Equal(new byte[] { 50, 255, 255, 50 }, doc.Streams[mask]);
+    }
+
+    [Fact]
+    public void GrayTransparencyBecomesAColorKey()
+    {
+        var png = ImageBuilder.Png(1, 1, 8, 0, [0, 7], transparency: [0, 7]);
+        var (img, doc) = Embed(png);
+        Assert.Contains("/Mask [7 7]", doc.Objects[img!.Id], StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RgbTransparencyBecomesAColorKey()
+    {
+        var png = ImageBuilder.Png(1, 1, 8, 2, [0, 1, 2, 3], transparency: [0, 1, 0, 2, 0, 3]);
+        var (img, doc) = Embed(png);
+        Assert.Contains("/Mask [1 1 2 2 3 3]", doc.Objects[img!.Id], StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void OpaquePngHasNoMask()
+    {
+        var (img, doc) = Embed(ImageBuilder.Png(1, 1, 8, 2, [0, 1, 2, 3]));
+        Assert.DoesNotContain("Mask", doc.Objects[img!.Id], StringComparison.Ordinal);
+    }
+
+    // ---------------------------------------------------------------- JPEG orientation
+
+    [Theory]
+    [InlineData(1, 320, 200, false)]
+    [InlineData(1, 320, 200, true)]
+    [InlineData(3, 320, 200, false)]
+    [InlineData(6, 200, 320, false)]
+    [InlineData(6, 200, 320, true)]
+    [InlineData(8, 200, 320, true)]
+    public void ExifOrientationSetsTheDisplayedSize(ushort orientation, int w, int h, bool bigEndian)
+    {
+        var (img, doc) = Embed(ImageBuilder.Jpeg(320, 200, 3, exif: ImageBuilder.ExifOrientation(orientation, bigEndian)));
+        Assert.Equal((w, h, (int)orientation), (img!.Width, img.Height, img.Orientation));
+        Assert.Contains("/Width 320 /Height 200", doc.Objects[img.Id], StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData(1, "10 0 0 20 1 2")]
+    [InlineData(2, "-10 0 0 20 11 2")]
+    [InlineData(3, "-10 0 0 -20 11 22")]
+    [InlineData(4, "10 0 0 -20 1 22")]
+    [InlineData(5, "0 -20 -10 0 11 22")]
+    [InlineData(6, "0 -20 10 0 1 22")]
+    [InlineData(7, "0 20 10 0 1 2")]
+    [InlineData(8, "0 20 -10 0 11 2")]
+    public void MatrixFillsTheBox(int orientation, string matrix) =>
+        Assert.Equal(matrix, new PdfImage(1, 10, 20, orientation).Matrix(1, 2, 10, 20));
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(9)]
+    public void InvalidOrientationIsIgnored(ushort orientation)
+    {
+        var (img, _) = Embed(ImageBuilder.Jpeg(320, 200, 3, exif: ImageBuilder.ExifOrientation(orientation, false)));
+        Assert.Equal(1, img!.Orientation);
+    }
+
+    [Fact]
+    public void TruncatedExifIsIgnored()
+    {
+        var exif = ImageBuilder.ExifOrientation(6, false)[..16];
+        Assert.Equal(1, Embed(ImageBuilder.Jpeg(320, 200, 3, exif: exif)).Image!.Orientation);
+    }
+
+    [Fact]
+    public void OtherApp1DataIsIgnored()
+    {
+        byte[] xmp = [.. "http://ns.adobe.com/xap/1.0/\0"u8, 1, 2, 3];
+        Assert.Equal(1, Embed(ImageBuilder.Jpeg(320, 200, 3, exif: xmp)).Image!.Orientation);
+    }
+
+    [Theory]
+    [InlineData(300, 800, 225, 600)]
+    [InlineData(2000, 100, 483.28, 24.16)]
+    [InlineData(100, 4000, 18.25, 730)]
+    public void FitShrinksButNeverEnlarges(int w, int h, double fw, double fh)
+    {
+        var (width, height) = new PdfImage(1, w, h).Fit(483.28, 730);
+        Assert.Equal(fw, width, 1);
+        Assert.Equal(fh, height, 1);
+    }
 }

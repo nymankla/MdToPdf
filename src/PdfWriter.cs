@@ -60,7 +60,7 @@ internal sealed class PdfWriter
         for (var k = 0; k < objects.Count; k++)
         {
             offsets[k] = pos;
-            WriteText(Invariant($"{k + 1} 0 obj\n"));
+            WriteText(PdfSyntax.Invariant($"{k + 1} 0 obj\n"));
             Write(objects[k] ?? throw new InvalidOperationException($"PDF object {k + 1} was reserved but never written."));
             WriteText("\nendobj\n");
         }
@@ -88,49 +88,23 @@ internal sealed class PdfWriter
         return ms.ToArray();
     }
 
-    public static byte[] Inflate(byte[] data)
+    /// <exception cref="InvalidDataException">The data isn't zlib, or unpacks to more than <paramref name="maxBytes"/>.</exception>
+    public static byte[] Inflate(byte[] data, long maxBytes = long.MaxValue)
     {
         using var z = new ZLibStream(new MemoryStream(data), CompressionMode.Decompress);
         using var ms = new MemoryStream();
-        z.CopyTo(ms);
+        var buffer = new byte[81920];
+        int read;
+        while ((read = z.Read(buffer)) > 0)
+        {
+            if (ms.Length + read > maxBytes)
+            {
+                throw new InvalidDataException();
+            }
+
+            ms.Write(buffer, 0, read);
+        }
+
         return ms.ToArray();
     }
-
-    /// <summary>A PDF literal string in WinAnsi, kept 7-bit by octal-escaping high bytes.</summary>
-    public static string Literal(string text)
-    {
-        var sb = new StringBuilder(text.Length + 2).Append('(');
-        foreach (var c in text)
-        {
-            var b = Fonts.Encode(c);
-            if (b is (byte)'(' or (byte)')' or (byte)'\\')
-            {
-                sb.Append('\\').Append((char)b);
-            }
-            else if (b > 126)
-            {
-                sb.Append('\\').Append(Convert.ToString(b, 8));
-            }
-            else
-            {
-                sb.Append((char)b);
-            }
-        }
-
-        return sb.Append(')').ToString();
-    }
-
-    /// <summary>A PDF text string (UTF-16BE with BOM) for metadata and bookmarks.</summary>
-    public static string TextString(string text)
-    {
-        var sb = new StringBuilder("<FEFF");
-        foreach (var c in text)
-        {
-            sb.Append(((int)c).ToString("X4", CultureInfo.InvariantCulture));
-        }
-
-        return sb.Append('>').ToString();
-    }
-
-    public static string Invariant(FormattableString s) => FormattableString.Invariant(s);
 }

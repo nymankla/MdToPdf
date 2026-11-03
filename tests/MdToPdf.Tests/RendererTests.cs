@@ -19,7 +19,7 @@ public sealed partial class RendererTests
 
     private static List<string> Annotations(PdfDoc doc) => [.. doc.ObjectsContaining("/Subtype /Link")];
 
-    private static string Outline(PdfDoc doc, string title) => Assert.Single(doc.ObjectsContaining($"/Title {PdfWriter.TextString(title)} "));
+    private static string Outline(PdfDoc doc, string title) => Assert.Single(doc.ObjectsContaining($"/Title {PdfSyntax.TextString(title)} "));
 
     private static string DestOf(string dict) => DestEntry().Match(dict).Groups[1].Value;
 
@@ -38,7 +38,7 @@ public sealed partial class RendererTests
     public void InfoHasTitleAndProducer()
     {
         var info = Assert.Single(PdfDoc.Render("x", title: "Résumé").ObjectsContaining("/Producer (MdToPdf)"));
-        Assert.Contains($"/Title {PdfWriter.TextString("Résumé")} ", info, StringComparison.Ordinal);
+        Assert.Contains($"/Title {PdfSyntax.TextString("Résumé")} ", info, StringComparison.Ordinal);
         Assert.Matches(@"/CreationDate \(D:\d{14}Z\)", info);
     }
 
@@ -76,7 +76,7 @@ public sealed partial class RendererTests
     public void PaperIsFoundByNameIgnoringCase(string name, double width) => Assert.Equal(width, Paper.Find(name)?.Width);
 
     [Fact]
-    public void UnknownPaperIsNull() => Assert.Null(Paper.Find("a5"));
+    public void UnknownPaperIsNull() => Assert.Null(Paper.Find("a9"));
 
     [Fact]
     public void XrefOffsetsPointAtObjects()
@@ -98,7 +98,7 @@ public sealed partial class RendererTests
         var saved = CultureInfo.CurrentCulture;
         try
         {
-            CultureInfo.CurrentCulture = CultureInfo.GetCultureInfo("de-DE");
+            CultureInfo.CurrentCulture = PdfSyntaxTests.CommaCulture();
             var content = PdfDoc.Render("Some *text* and `code`").Content(0);
             Assert.Contains("10.5 Tf", content, StringComparison.Ordinal);
             Assert.DoesNotMatch(@"\d,\d", content);
@@ -108,14 +108,6 @@ public sealed partial class RendererTests
             CultureInfo.CurrentCulture = saved;
         }
     }
-
-    [Theory]
-    [InlineData(2.0, "2")]
-    [InlineData(1.5, "1.5")]
-    [InlineData(1.234, "1.23")]
-    [InlineData(-0.5, "-0.5")]
-    [InlineData(0.001, "0")]
-    public void FormatsNumbersWithTwoDecimals(double value, string expected) => Assert.Equal(expected, Renderer.N(value));
 
     [Fact]
     public void RgbOperators()
@@ -267,7 +259,7 @@ public sealed partial class RendererTests
     {
         var doc = PdfDoc.Render("# Intro\n\ntext\n\n# Intro\n\n[x](#intro-1)");
         // Outline items are numbered in document order, so the second one is the second heading.
-        var dests = doc.ObjectsContaining($"/Title {PdfWriter.TextString("Intro")} ").Select(DestOf).ToList();
+        var dests = doc.ObjectsContaining($"/Title {PdfSyntax.TextString("Intro")} ").Select(DestOf).ToList();
         Assert.Equal(2, dests.Distinct().Count());
         Assert.Equal(dests[1], DestOf(Assert.Single(Annotations(doc))));
     }
@@ -283,7 +275,7 @@ public sealed partial class RendererTests
     public void LongerHeadingDoesNotShiftDuplicateNumbering()
     {
         var doc = PdfDoc.Render("# Intro\n\n# Intro Part\n\n# Intro\n\n[x](#intro-1)");
-        var intros = doc.ObjectsContaining($"/Title {PdfWriter.TextString("Intro")} ").Select(DestOf).ToList();
+        var intros = doc.ObjectsContaining($"/Title {PdfSyntax.TextString("Intro")} ").Select(DestOf).ToList();
         Assert.Equal(intros[1], DestOf(Assert.Single(Annotations(doc))));
     }
 
@@ -292,7 +284,7 @@ public sealed partial class RendererTests
     {
         // "A 1" takes "a-1", so the second "A" becomes "a-2" (as on GitHub).
         var doc = PdfDoc.Render("# A\n\n# A 1\n\n# A\n\n[x](#a-2)");
-        var dests = doc.ObjectsContaining($"/Title {PdfWriter.TextString("A")} ").Select(DestOf).ToList();
+        var dests = doc.ObjectsContaining($"/Title {PdfSyntax.TextString("A")} ").Select(DestOf).ToList();
         Assert.Equal(dests[1], DestOf(Assert.Single(Annotations(doc))));
     }
 

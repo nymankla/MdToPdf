@@ -3,12 +3,12 @@ using System.Text;
 namespace MdToPdf;
 
 /// <summary>The standard PDF fonts used by the renderer; the value is the resource index (/F0../F4).</summary>
-internal enum FontId { Regular, Bold, Italic, BoldItalic, Mono }
+internal enum FontId { Regular, Bold, Italic, BoldItalic, Mono, MonoBold }
 
 /// <summary>Metrics and WinAnsi encoding for the built-in (non-embedded) PDF Type 1 fonts.</summary>
 internal static class Fonts
 {
-    public static readonly string[] BaseNames = ["Helvetica", "Helvetica-Bold", "Helvetica-Oblique", "Helvetica-BoldOblique", "Courier"];
+    public static readonly string[] BaseNames = ["Helvetica", "Helvetica-Bold", "Helvetica-Oblique", "Helvetica-BoldOblique", "Courier", "Courier-Bold"];
 
     // Advance widths in 1/1000 em for WinAnsi codes 32..255 (from the Adobe AFM files).
     // Oblique variants share the upright widths; Courier is fixed at 600.
@@ -100,18 +100,44 @@ internal static class Fonts
         ['☐'] = "[ ]",
         ['☑'] = "[x]",
         ['★'] = "*",
+        ['\u2002'] = " ", // en space
+        ['\u2003'] = " ", // em space
+        ['\u2004'] = " ", // three-per-em space
+        ['\u2005'] = " ", // four-per-em space
+        ['\u2006'] = " ", // six-per-em space
+        ['\u2007'] = "\u00A0", // figure space, which doesn't break
+        ['\u2008'] = " ", // punctuation space
         ['\u2009'] = " ", // thin space
+        ['\u200A'] = " ", // hair space
         ['\u202F'] = "\u00A0", // narrow no-break space
+        ['\u205F'] = " ", // medium mathematical space
+        ['\u3000'] = " ", // ideographic space
+        ['\u2010'] = "-", // hyphen
+        ['\u2011'] = "-", // non-breaking hyphen
+        ['\u2012'] = "-", // figure dash
+        ['\u2015'] = "—", // horizontal bar
+    };
+
+    // Each string pairs a base letter with its composed form, for the combining marks that lead to a WinAnsi letter.
+    private static readonly Dictionary<char, string> Compositions = new()
+    {
+        ['\u0300'] = "AÀEÈIÌOÒUÙaàeèiìoòuù",
+        ['\u0301'] = "AÁEÉIÍOÓUÚYÝaáeéiíoóuúyý",
+        ['\u0302'] = "AÂEÊIÎOÔUÛaâeêiîoôuû",
+        ['\u0303'] = "AÃNÑOÕaãnñoõ",
+        ['\u0308'] = "AÄEËIÏOÖUÜYŸaäeëiïoöuüyÿ",
+        ['\u030A'] = "AÅaå",
+        ['\u030C'] = "SŠZŽsšzž",
+        ['\u0327'] = "CÇcç",
     };
 
     /// <summary>
-    /// Rewrites text for drawing with the standard fonts: common symbols get ASCII stand-ins, invisible chars
-    /// (joiners, variation selectors, BOM) are dropped and astral chars (emoji) become '?'. Everything that is
-    /// measured or drawn goes through this; the AST and bookmarks keep the original Unicode.
+    /// Composes base letters with combining accents, as files from macOS often have them. <see cref="string.Normalize()"/>
+    /// can't do this: under InvariantGlobalization it changes nothing, so the letters that matter here are mapped directly.
     /// </summary>
-    public static string Prepare(string text)
+    public static string Compose(string text)
     {
-        if (text.AsSpan().IndexOfAnyExceptInRange(' ', '~') < 0)
+        if (text.AsSpan().IndexOfAnyInRange('\u0300', '\u036F') < 0)
         {
             return text;
         }
@@ -119,18 +145,64 @@ internal static class Fonts
         var sb = new StringBuilder(text.Length);
         foreach (var c in text)
         {
-            if (char.IsHighSurrogate(c) || c is '\u200D' or '\uFE0E' or '\uFE0F' or '\uFEFF')
+            if (sb.Length > 0 && Compositions.TryGetValue(c, out var pairs))
+            {
+                var at = pairs.IndexOf(sb[^1], StringComparison.Ordinal);
+                if (at >= 0 && at % 2 == 0)
+                {
+                    sb[^1] = pairs[at + 1];
+                    continue;
+                }
+            }
+
+            sb.Append(c);
+        }
+
+        return sb.ToString();
+    }
+
+    private static bool IsInvisible(char c) =>
+        c is '\u00AD' or (>= '\u200B' and <= '\u200F') or '\u2060' or '\uFE0E' or '\uFE0F' or '\uFEFF' or (>= '\u0300' and <= '\u036F');
+
+    /// <summary>
+    /// Rewrites text for drawing with the standard fonts: common symbols get ASCII stand-ins, invisible chars
+    /// (soft hyphens, joiners, variation selectors, leftover combining marks, BOM) are dropped and whatever the fonts
+    /// lack becomes '?'. Everything that is measured or drawn goes through this; the AST and bookmarks keep the original
+    /// Unicode. Each code point lost that way is added to <paramref name="unsupported"/>.
+    /// </summary>
+    public static string Prepare(string text, ISet<int>? unsupported = null)
+    {
+        if (text.AsSpan().IndexOfAnyExceptInRange(' ', '~') < 0)
+        {
+            return text;
+        }
+
+        var sb = new StringBuilder(text.Length);
+        for (var i = 0; i < text.Length; i++)
+        {
+            var c = text[i];
+            if (char.IsHighSurrogate(c) && i + 1 < text.Length && char.IsLowSurrogate(text[i + 1]))
+            {
+                i++;
+                unsupported?.Add(char.ConvertToUtf32(c, text[i]));
+                sb.Append('?');
+            }
+            else if (IsInvisible(c))
             {
                 continue;
             }
-
-            if (Fallbacks.TryGetValue(c, out var fallback))
+            else if (Fallbacks.TryGetValue(c, out var fallback))
             {
                 sb.Append(fallback);
             }
+            else if (Encode(c) == (byte)'?' && c != '?')
+            {
+                unsupported?.Add(c);
+                sb.Append('?');
+            }
             else
             {
-                sb.Append(char.IsLowSurrogate(c) ? '?' : c);
+                sb.Append(c);
             }
         }
 
@@ -140,14 +212,32 @@ internal static class Fonts
     /// <summary>Maps a char to its WinAnsi byte; anything unrepresentable becomes '?'.</summary>
     public static byte Encode(char c) => c switch
     {
-        >= ' ' and <= '~' => (byte)c,
-        >= ' ' and <= 'ÿ' => (byte)c,
+        >= ' ' and <= '~' or >= '\u00A0' and <= 'ÿ' => (byte)c,
         _ => WinAnsiExtras.TryGetValue(c, out var b) ? b : (byte)'?',
     };
 
+    /// <summary>The character a Windows-1252 byte stands for; U+FFFD for the five bytes it leaves undefined.</summary>
+    public static char FromWindows1252(byte b)
+    {
+        if (b is < 0x80 or >= 0xA0)
+        {
+            return (char)b;
+        }
+
+        foreach (var (c, code) in WinAnsiExtras)
+        {
+            if (code == b)
+            {
+                return c;
+            }
+        }
+
+        return '\uFFFD';
+    }
+
     public static double Width(string text, FontId font, double size)
     {
-        if (font == FontId.Mono)
+        if (font is FontId.Mono or FontId.MonoBold)
         {
             return text.Length * 0.6 * size;
         }

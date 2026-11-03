@@ -70,4 +70,72 @@ public sealed class FontsTests
         var text = "plain ASCII text";
         Assert.Same(text, Fonts.Prepare(text));
     }
+
+    [Theory]
+    [InlineData("a\u200Bb", "ab")] // zero-width space
+    [InlineData("a\u200Cb", "ab")] // zero-width non-joiner
+    [InlineData("a\u00ADb", "ab")] // soft hyphen
+    [InlineData("a\u2060b", "ab")] // word joiner
+    [InlineData("a\u0301", "a")] // an accent that didn't compose
+    public void PrepareDropsInvisibleCharacters(string text, string expected) => Assert.Equal(expected, Fonts.Prepare(text));
+
+    [Theory]
+    [InlineData("a\u2010b", "a-b")]
+    [InlineData("a\u2011b", "a-b")]
+    [InlineData("a\u2012b", "a-b")]
+    [InlineData("a\u2015b", "a—b")]
+    [InlineData("a\u2002b", "a b")]
+    [InlineData("a\u2003b", "a b")]
+    [InlineData("a\u3000b", "a b")]
+    public void PrepareMapsDashesAndSpaces(string text, string expected) => Assert.Equal(expected, Fonts.Prepare(text));
+
+    [Fact]
+    public void PrepareReportsWhatItCouldNotShow()
+    {
+        var lost = new SortedSet<int>();
+        Assert.Equal("? ? ok é →".Replace("→", "->", StringComparison.Ordinal), Fonts.Prepare("中 😀 ok é →", lost));
+        Assert.Equal([0x4E2D, 0x1F600], lost);
+    }
+
+    [Fact]
+    public void ALiteralQuestionMarkIsNotReported()
+    {
+        var lost = new SortedSet<int>();
+        Fonts.Prepare("what? é", lost);
+        Assert.Empty(lost);
+    }
+
+    [Fact]
+    public void LoneSurrogateBecomesAQuestionMark() => Assert.Equal("a?b", Fonts.Prepare("a\uD83Db"));
+
+    [Theory]
+    [InlineData(0x41, 'A')]
+    [InlineData(0xE5, 'å')]
+    [InlineData(0x80, '€')]
+    [InlineData(0x96, '–')]
+    [InlineData(0x81, '\uFFFD')]
+    public void Windows1252(byte code, char expected) => Assert.Equal(expected, Fonts.FromWindows1252(code));
+
+    [Fact]
+    public void Windows1252RoundTripsThroughEncode()
+    {
+        for (var b = 0x20; b <= 0xFF; b++)
+        {
+            var c = Fonts.FromWindows1252((byte)b);
+            if (c != '\uFFFD' && b != 0x7F)
+            {
+                Assert.Equal(b, Fonts.Encode(c));
+            }
+        }
+    }
+
+    [Theory]
+    [InlineData("A\u030Aa\u0308", "Åä")]
+    [InlineData("plain", "plain")]
+    [InlineData("q\u0301", "q\u0301")] // no such letter in WinAnsi: left for Prepare
+    [InlineData("\u0301a", "\u0301a")]
+    public void Compose(string text, string expected) => Assert.Equal(expected, Fonts.Compose(text));
+
+    [Fact]
+    public void BoldMonoIsFixedPitchToo() => Assert.Equal(18, Fonts.Width("abc", FontId.MonoBold, 10), 6);
 }

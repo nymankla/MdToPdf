@@ -88,33 +88,11 @@ public sealed class PdfWriterTests
         Assert.Empty(PdfWriter.Inflate(PdfWriter.Deflate([])));
     }
 
-    [Theory]
-    [InlineData("plain", "(plain)")]
-    [InlineData(@"a(b)c\", @"(a\(b\)c\\)")]
-    [InlineData("é", @"(\351)")]
-    [InlineData("€", @"(\200)")]
-    [InlineData("→", "(?)")]
-    [InlineData("", "()")]
-    public void Literal(string text, string expected) => Assert.Equal(expected, PdfWriter.Literal(text));
-
-    [Theory]
-    [InlineData("", "<FEFF>")]
-    [InlineData("Aé", "<FEFF004100E9>")]
-    [InlineData("→", "<FEFF2192>")]
-    public void TextString(string text, string expected) => Assert.Equal(expected, PdfWriter.TextString(text));
-
     [Fact]
-    public void InvariantIgnoresCurrentCulture()
+    public void InflateStopsAtTheLimit()
     {
-        var saved = CultureInfo.CurrentCulture;
-        try
-        {
-            CultureInfo.CurrentCulture = CultureInfo.GetCultureInfo("sv-SE");
-            Assert.Equal("1.5", PdfWriter.Invariant($"{1.5}"));
-        }
-        finally
-        {
-            CultureInfo.CurrentCulture = saved;
-        }
+        var bomb = PdfWriter.Deflate(new byte[100_000]);
+        Assert.Equal(100_000, PdfWriter.Inflate(bomb, 100_000).Length);
+        Assert.Throws<InvalidDataException>(() => PdfWriter.Inflate(bomb, 99_999));
     }
 }
